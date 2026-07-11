@@ -1,12 +1,12 @@
 using AiLearning.Core.Interfaces;
 using AiLearning.Core.Models;
 
-namespace AiLearning.Infrastructure.Services;
+namespace AiLearning.Core.Services;
 
 public sealed class UserIntentAnalyzer : IUserIntentAnalyzer
 {
     private readonly IAiService _aiService;
-
+    
     public UserIntentAnalyzer(IAiService aiService)
     {
         _aiService = aiService;

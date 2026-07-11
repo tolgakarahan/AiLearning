@@ -1,4 +1,6 @@
-﻿using AiLearning.Core.Interfaces;
+﻿using AiLearning.Console.Features.SupportRequestExtraction;
+using AiLearning.Core.Features.SupportRequests.Models;
+using AiLearning.Core.Interfaces;
 using AiLearning.Core.Models;
 using AiLearning.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,6 +11,52 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddAiServices(builder.Configuration);
 
 using var host = builder.Build();
+
+var messages = new List<AiMessage>
+{
+    new AiMessage
+    {
+        Role = "system",
+        Content = SupportRequestExtractionPrompt.System
+    },
+
+    new AiMessage
+    {
+        Role = "user",
+        Content = """
+        Dün aldığım siyah kulaklığın sağ tarafından ses gelmiyor.
+        """
+    }
+};
+
+var aiService = host.Services.GetRequiredService<IAiService>();
+
+
+var result =
+    await aiService.AskStructuredAsync<SupportRequestExtraction>(messages);
+
+Console.WriteLine($"Order Number     : {result.OrderNumber ?? "null"}");
+Console.WriteLine($"Customer Name    : {result.CustomerName ?? "null"}");
+Console.WriteLine($"Email            : {result.Email ?? "null"}");
+Console.WriteLine($"Issue Type       : {result.IssueType}");
+Console.WriteLine($"Requested Action : {result.RequestedAction}");
+Console.WriteLine($"Urgency          : {result.Urgency}");
+Console.WriteLine($"Summary          : {result.Summary}");
+
+Console.WriteLine("Affected Products:");
+
+foreach (var product in result.AffectedProducts)
+{
+    Console.WriteLine($"- {product.Name}: {product.Problem}");
+}
+
+
+
+return;
+
+
+
+
 
 Console.WriteLine("AI Learning");
 Console.WriteLine("1 - Chat");

@@ -5,7 +5,10 @@ using AiLearning.Core.Interfaces;
 using AiLearning.Core.Models;
 using OpenAI.Responses;
 using OpenAI.Chat;
-using AiLearning.Infrastructure.StructuredOutputs;
+using System.Text.Json.Nodes;
+using System.Text.Json.Schema;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace AiLearning.Infrastructure.Services;
 
@@ -15,14 +18,57 @@ public sealed class OpenAiCompatibleAiService : IAiService
     private readonly ChatClient _chatClient;
     private readonly AiOptions _options;
 
-    private static readonly JsonSerializerOptions StructuredJsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        Converters =
+    private static readonly JsonSerializerOptions StructuredJsonOptions =
+        new(JsonSerializerDefaults.Web)
         {
-            new System.Text.Json.Serialization.JsonStringEnumConverter()
-        }
-    };
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+            RespectNullableAnnotations = true,
+            RespectRequiredConstructorParameters = true,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            Converters =
+            {
+                new JsonStringEnumConverter()
+            }
+        };
+
+    private static readonly JsonSchemaExporterOptions SchemaExporterOptions =
+        new()
+        {
+            TreatNullObliviousAsNonNullable = true,
+
+            TransformSchemaNode = (_, schema) =>
+            {
+                if (schema is not JsonObject schemaObject)
+                {
+                    return schema;
+                }
+
+                if (schemaObject["properties"] is not JsonObject properties)
+                {
+                    return schema;
+                }
+
+                schemaObject["additionalProperties"] = false;
+
+                var requiredProperties = new JsonArray();
+
+                foreach (var property in properties)
+                {
+                    requiredProperties.Add(property.Key);
+                }
+
+                schemaObject["required"] = requiredProperties;
+
+                return schemaObject;
+            }
+        };
+
+    private static readonly JsonSerializerOptions JsonOptions =
+            new(JsonSerializerDefaults.Web)
+            {
+                RespectNullableAnnotations = true,
+                RespectRequiredConstructorParameters = true
+            };
 
     public OpenAiCompatibleAiService(
         ResponsesClient responsesClient,
@@ -134,23 +180,35 @@ public sealed class OpenAiCompatibleAiService : IAiService
     }
 
     public async Task<T> AskStructuredAsync<T>(
-        IReadOnlyList<AiMessage> messages,
-        CancellationToken cancellationToken = default)
+     IReadOnlyList<AiMessage> messages,
+     CancellationToken cancellationToken = default)
     {
         var chatMessages = messages
-            .Select<AiMessage, ChatMessage>(message => message.Role.ToLowerInvariant() switch
-            {
-                "system" => new SystemChatMessage(message.Content),
-                "assistant" => new AssistantChatMessage(message.Content),
-                _ => new UserChatMessage(message.Content)
-            })
+            .Select<AiMessage, ChatMessage>(message =>
+                message.Role.ToLowerInvariant() switch
+                {
+                    "system" => new SystemChatMessage(message.Content),
+                    "assistant" => new AssistantChatMessage(message.Content),
+                    _ => new UserChatMessage(message.Content)
+                })
             .ToList();
+
+        JsonNode schemaNode = StructuredJsonOptions.GetJsonSchemaAsNode(typeof(T), SchemaExporterOptions);
+ 
+        Console.WriteLine(
+            schemaNode.ToJsonString(
+                new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                }));
+
+        BinaryData jsonSchema = BinaryData.FromString(schemaNode.ToJsonString());
 
         var options = new ChatCompletionOptions
         {
             ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
                 jsonSchemaFormatName: typeof(T).Name,
-                jsonSchema: JsonSchemaGenerator.GenerateFor<T>(),
+                jsonSchema: jsonSchema,
                 jsonSchemaIsStrict: true)
         };
 
@@ -162,17 +220,28 @@ public sealed class OpenAiCompatibleAiService : IAiService
         var content = completion.Value.Content;
 
         if (content.Count == 0)
-            throw new InvalidOperationException("AI structured response boş content döndürdü.");
+        {
+            throw new InvalidOperationException(
+                "AI structured response boş content döndürdü.");
+        }
 
         var json = content[0].Text;
 
         if (string.IsNullOrWhiteSpace(json))
-            throw new InvalidOperationException("AI structured response boş JSON döndürdü.");
+        {
+            throw new InvalidOperationException(
+                "AI structured response boş JSON döndürdü.");
+        }
 
-        var result = JsonSerializer.Deserialize<T>(json, StructuredJsonOptions);
+        var result = JsonSerializer.Deserialize<T>(
+            json,
+            StructuredJsonOptions);
 
         if (result is null)
-            throw new InvalidOperationException("AI cevabı boş JSON sonucu üretti.");
+        {
+            throw new InvalidOperationException(
+                "AI cevabı boş JSON sonucu üretti.");
+        }
 
         return result;
     }
@@ -197,5 +266,7 @@ public sealed class OpenAiCompatibleAiService : IAiService
 
         return cleaned;
     }
+
+
 
 }
