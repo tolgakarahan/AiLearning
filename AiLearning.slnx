@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AiLearning.Console/AiLearning.Console.csproj" />
+    <Project Path="src/AiLearning.Core/AiLearning.Core.csproj" />
+    <Project Path="src/AiLearning.Infrastructure/AiLearning.Infrastructure.csproj" />
+  </Folder>
+</Solution>
