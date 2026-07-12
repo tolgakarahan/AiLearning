@@ -12,6 +12,16 @@ builder.Services.AddAiServices(builder.Configuration);
 
 using var host = builder.Build();
 
+
+
+var aiService = host.Services.GetRequiredService<IAiService>();
+
+var evalRunner = new SupportRequestEvalRunner(aiService);
+
+await evalRunner.RunAsync(SupportRequestEvalCases.All[1]);
+
+return;
+
 var messages = new List<AiMessage>
 {
     new AiMessage
@@ -28,9 +38,6 @@ var messages = new List<AiMessage>
         """
     }
 };
-
-var aiService = host.Services.GetRequiredService<IAiService>();
-
 
 var result =
     await aiService.AskStructuredAsync<SupportRequestExtraction>(messages);

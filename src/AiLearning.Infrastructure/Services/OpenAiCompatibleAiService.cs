@@ -195,13 +195,6 @@ public sealed class OpenAiCompatibleAiService : IAiService
 
         JsonNode schemaNode = StructuredJsonOptions.GetJsonSchemaAsNode(typeof(T), SchemaExporterOptions);
  
-        Console.WriteLine(
-            schemaNode.ToJsonString(
-                new JsonSerializerOptions
-                {
-                    WriteIndented = true
-                }));
-
         BinaryData jsonSchema = BinaryData.FromString(schemaNode.ToJsonString());
 
         var options = new ChatCompletionOptions
