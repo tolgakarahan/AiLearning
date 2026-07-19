@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AiLearning.Console.Features.SupportRequestExtraction;
 using AiLearning.Core.Features.SupportRequests.Models;
 using AiLearning.Core.Interfaces;
@@ -12,7 +13,7 @@ internal sealed class SupportRequestEvalRunner
         _aiService = aiService;
     }
 
-    public async Task RunAsync(SupportRequestEvalCase evalCase, CancellationToken cancellationToken = default)
+    public async Task<bool> RunAsync(SupportRequestEvalCase evalCase, CancellationToken cancellationToken = default)
     {
         var messages = new List<AiMessage>
         {
@@ -35,6 +36,12 @@ internal sealed class SupportRequestEvalRunner
             evalCase.Expected.Summary,
             actual.Summary,
             cancellationToken);
+
+        var affectedProductsComparison = await CompareAffectedProductsAsync(
+            evalCase.Expected.AffectedProducts,
+            actual.AffectedProducts,
+            cancellationToken);
+
 
         var comparison = SupportRequestComparer.Compare(evalCase.Expected, actual);
 
@@ -59,6 +66,15 @@ internal sealed class SupportRequestEvalRunner
             Console.WriteLine($"Failed Fields    : {string.Join(", ", failedFields)}");
         }
 
+        Console.WriteLine();
+        Console.WriteLine("AFFECTED PRODUCTS COMPARISON");
+        Console.WriteLine(
+            $"Affected Products : " +
+            $"{(affectedProductsComparison.IsEquivalent ? "PASS" : "FAIL")}");
+        Console.WriteLine(
+            $"Reason            : {affectedProductsComparison.Reason}");
+
+
         Console.WriteLine($"Case: {evalCase.Name}");
         Console.WriteLine();
 
@@ -69,6 +85,17 @@ internal sealed class SupportRequestEvalRunner
 
         Console.WriteLine("ACTUAL");
         Print(actual);
+
+        var overallPassed = 
+            comparison.ExactFieldsMatch &&
+            summaryComparison.IsEquivalent &&
+            affectedProductsComparison.IsEquivalent;
+
+        Console.WriteLine();
+        Console.WriteLine("OVERALL RESULT");
+        Console.WriteLine(overallPassed ? "PASS" : "FAIL");
+
+        return overallPassed;
     }
 
     private async Task<SemanticComparisonResult> CompareSummaryAsync(
@@ -121,6 +148,70 @@ internal sealed class SupportRequestEvalRunner
         return await _aiService.AskStructuredAsync<SemanticComparisonResult>(
             messages,
             cancellationToken);
+    }
+
+    private async Task<AffectedProductsComparisonResult>
+    CompareAffectedProductsAsync(
+        IReadOnlyList<AffectedProduct> expected,
+        IReadOnlyList<AffectedProduct> actual,
+        CancellationToken cancellationToken)
+    {
+        var expectedJson = JsonSerializer.Serialize(expected);
+        var actualJson = JsonSerializer.Serialize(actual);
+
+        var messages = new List<AiMessage>
+        {
+            new()
+            {
+                Role = "system",
+                Content =
+                    """
+                    You are evaluating two extracted customer support product lists.
+
+                    Decide whether the expected and actual lists contain the same
+                    affected products and communicate equivalent problems for each product.
+
+                    Ignore:
+                    - list ordering
+                    - capitalization
+                    - punctuation
+                    - minor grammar or spelling differences
+                    - wording differences that preserve the same meaning
+                    - equivalent product names such as abbreviations or common synonyms
+
+                    Return IsEquivalent as false if:
+                    - an expected product is missing
+                    - an unsupported product is added
+                    - a product is matched with the wrong problem
+                    - an important part of a product problem is missing
+                    - the problem meanings contradict each other
+
+                    Base your decision only on the two lists provided.
+
+                    In the Reason field, clearly explain any meaningful difference.
+                    If there is no meaningful difference, state that the lists are equivalent.
+
+                    Product names and problem descriptions may be written in Turkish.
+                    """
+            },
+            new()
+            {
+                Role = "user",
+                Content =
+                    $"""
+                    Expected affected products:
+                    {expectedJson}
+
+                    Actual affected products:
+                    {actualJson}
+                    """
+            }
+        };
+
+        return await _aiService
+            .AskStructuredAsync<AffectedProductsComparisonResult>(
+                messages,
+                cancellationToken);
     }
 
     private static void Print(SupportRequestExtraction result)

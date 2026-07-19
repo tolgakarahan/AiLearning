@@ -18,7 +18,38 @@ var aiService = host.Services.GetRequiredService<IAiService>();
 
 var evalRunner = new SupportRequestEvalRunner(aiService);
 
-await evalRunner.RunAsync(SupportRequestEvalCases.All[1]);
+using var cancellationTokenSource = new CancellationTokenSource();
+var token = cancellationTokenSource.Token;
+
+var passedCount = 0;
+
+foreach (var evalCase in SupportRequestEvalCases.All)
+{
+    var passed = await evalRunner.RunAsync(evalCase, token);
+
+    if (token.IsCancellationRequested)
+    {
+        Console.WriteLine("Evaluation cancelled.");
+        break;
+    }
+
+    if (passed)
+    {
+        passedCount++;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine(new string('=', 60));
+    Console.WriteLine();
+}
+
+var totalCount = SupportRequestEvalCases.All.Count;
+var failedCount = totalCount - passedCount;
+
+Console.WriteLine("EVALUATION SUMMARY");
+Console.WriteLine($"Total  : {totalCount}");
+Console.WriteLine($"Passed : {passedCount}");
+Console.WriteLine($"Failed : {failedCount}");
 
 return;
 
