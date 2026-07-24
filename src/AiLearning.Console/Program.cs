@@ -22,34 +22,61 @@ using var cancellationTokenSource = new CancellationTokenSource();
 var token = cancellationTokenSource.Token;
 
 var passedCount = 0;
+var failedCount = 0;
+var errorCount = 0;
 
 foreach (var evalCase in SupportRequestEvalCases.All)
 {
-    var passed = await evalRunner.RunAsync(evalCase, token);
-
     if (token.IsCancellationRequested)
     {
         Console.WriteLine("Evaluation cancelled.");
         break;
     }
 
-    if (passed)
+    try
     {
-        passedCount++;
+        var passed = await evalRunner.RunAsync(evalCase, token);
+
+        if (passed)
+            passedCount++;
+        else
+            failedCount++;
     }
+    catch (OperationCanceledException) when (token.IsCancellationRequested)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Evaluation cancelled.");
+        break;
+    }
+    catch (Exception exception)
+    {
+        errorCount++;
+
+
+        Console.WriteLine();
+        Console.WriteLine($"EVAL ERROR: {exception.Message}");
+    }
+
 
     Console.WriteLine();
     Console.WriteLine(new string('=', 60));
     Console.WriteLine();
 }
 
+var evaluatedCount = passedCount + failedCount;
+
+var passRate = evaluatedCount == 0
+    ? 0
+    : (double)passedCount / evaluatedCount * 100;
+
 var totalCount = SupportRequestEvalCases.All.Count;
-var failedCount = totalCount - passedCount;
 
 Console.WriteLine("EVALUATION SUMMARY");
 Console.WriteLine($"Total  : {totalCount}");
 Console.WriteLine($"Passed : {passedCount}");
 Console.WriteLine($"Failed : {failedCount}");
+Console.WriteLine($"Errors : {errorCount}");
+Console.WriteLine($"Pass Rate : {passRate:F1}%");
 
 return;
 

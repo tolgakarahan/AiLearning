@@ -16,7 +16,7 @@ internal static class SupportRequestEvalCases
                 Email = null,
                 IssueType = SupportIssueType.DefectiveProduct,
                 RequestedAction = RequestedAction.Replacement,
-                Urgency = SupportUrgency.Unknown,
+                Urgency = SupportUrgency.Normal,
                 AffectedProducts =
                 [
                     new AffectedProduct
