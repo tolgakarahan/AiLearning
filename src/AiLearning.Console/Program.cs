@@ -12,9 +12,24 @@ builder.Services.AddAiServices(builder.Configuration);
 
 using var host = builder.Build();
 
-
-
 var aiService = host.Services.GetRequiredService<IAiService>();
+
+
+var messagesForToolCall = new List<AiMessage>
+{
+    new()
+    {
+        Role = "user",
+        Content = "12345 numaralı siparişimin durumu nedir?"
+    }
+};
+
+await aiService.InspectToolCallAsync(messagesForToolCall);
+
+return;
+
+
+
 
 var evalRunner = new SupportRequestEvalRunner(aiService);
 
@@ -98,7 +113,7 @@ var messages = new List<AiMessage>
 };
 
 var result =
-    await aiService.AskStructuredAsync<SupportRequestExtraction>(messages);
+    await aiService.AskStructuredAsync<SupportRequestExtraction>(messagesForToolCall);
 
 Console.WriteLine($"Order Number     : {result.OrderNumber ?? "null"}");
 Console.WriteLine($"Customer Name    : {result.CustomerName ?? "null"}");

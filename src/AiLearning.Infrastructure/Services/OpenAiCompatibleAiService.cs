@@ -18,6 +18,11 @@ public sealed class OpenAiCompatibleAiService : IAiService
     private readonly ChatClient _chatClient;
     private readonly AiOptions _options;
 
+    private static readonly JsonSerializerOptions ToolJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private static readonly JsonSerializerOptions StructuredJsonOptions =
         new(JsonSerializerDefaults.Web)
         {
@@ -194,7 +199,7 @@ public sealed class OpenAiCompatibleAiService : IAiService
             .ToList();
 
         JsonNode schemaNode = StructuredJsonOptions.GetJsonSchemaAsNode(typeof(T), SchemaExporterOptions);
- 
+
         BinaryData jsonSchema = BinaryData.FromString(schemaNode.ToJsonString());
 
         var options = new ChatCompletionOptions
@@ -239,27 +244,175 @@ public sealed class OpenAiCompatibleAiService : IAiService
         return result;
     }
 
-    private static string CleanJsonResponse(string text)
+    public async Task InspectToolCallAsync(IReadOnlyList<AiMessage> messages, CancellationToken cancellationToken = default)
     {
-        var cleaned = text.Trim();
+        var chatMessages = messages
+            .Select<AiMessage, ChatMessage>(message =>
+                message.Role.ToLowerInvariant() switch
+                {
+                    "system" => new SystemChatMessage(message.Content),
+                    "assistant" => new AssistantChatMessage(message.Content),
+                    _ => new UserChatMessage(message.Content)
+                })
+            .ToList();
 
-        if (cleaned.StartsWith("```json", StringComparison.OrdinalIgnoreCase))
+        var options = new ChatCompletionOptions();
+
+        options.Tools.Add(GetOrderStatusTool);
+
+        const int maxIterations = 5;
+        var completed = false;
+
+        for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
-            cleaned = cleaned["```json".Length..].Trim();
-        }
-        else if (cleaned.StartsWith("```"))
-        {
-            cleaned = cleaned["```".Length..].Trim();
+            var completion = await _chatClient.CompleteChatAsync(
+                chatMessages,
+                options,
+                cancellationToken);
+
+            Console.WriteLine();
+            Console.WriteLine($"Finish Reason : {completion.Value.FinishReason}");
+            Console.WriteLine($"Content Count : {completion.Value.Content.Count}");
+            Console.WriteLine($"Tool Count    : {completion.Value.ToolCalls.Count}");
+
+            if (completion.Value.FinishReason == ChatFinishReason.Stop)
+            {
+                foreach (var contentPart in completion.Value.Content)
+                {
+                    Console.WriteLine($"Final Response : {contentPart.Text}");
+                }
+
+                completed = true;
+                break;
+            }
+
+            if (completion.Value.FinishReason != ChatFinishReason.ToolCalls)
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected finish reason: {completion.Value.FinishReason}");
+            }
+
+            chatMessages.Add(new AssistantChatMessage(completion.Value));
+
+            foreach (var toolCall in completion.Value.ToolCalls)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"Tool Call Id : {toolCall.Id}");
+                Console.WriteLine($"Tool Name    : {toolCall.FunctionName}");
+                Console.WriteLine($"Arguments    : {toolCall.FunctionArguments}");
+
+                if (toolCall.FunctionName != "get_order_status")
+                {
+                    var errorResult = JsonSerializer.Serialize(new
+                    {
+                        success = false,
+                        error = $"Unsupported tool: {toolCall.FunctionName}"
+                    });
+
+                    chatMessages.Add(
+                        new ToolChatMessage(
+                            toolCall.Id,
+                            errorResult));
+
+                    continue;
+                }
+
+                GetOrderStatusArguments? arguments;
+
+                try
+                {
+                    arguments =
+                        JsonSerializer.Deserialize<GetOrderStatusArguments>(
+                            toolCall.FunctionArguments);
+                }
+                catch (JsonException exception)
+                {
+                    var errorResult = JsonSerializer.Serialize(new
+                    {
+                        success = false,
+                        error = "Tool arguments contain invalid JSON.",
+                        detail = exception.Message
+                    });
+
+                    chatMessages.Add(
+                        new ToolChatMessage(
+                            toolCall.Id,
+                            errorResult));
+
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(arguments?.OrderNumber))
+                {
+                    var errorResult = JsonSerializer.Serialize(new
+                    {
+                        success = false,
+                        error = "The order number is required."
+                    });
+
+                    chatMessages.Add(
+                        new ToolChatMessage(
+                            toolCall.Id,
+                            errorResult));
+
+                    continue;
+                }
+
+                var status = GetOrderStatus(arguments.OrderNumber);
+
+                var successResult = JsonSerializer.Serialize(new
+                {
+                    success = true,
+                    orderNumber = arguments.OrderNumber,
+                    status
+                });
+
+                Console.WriteLine($"Tool Result  : {successResult}");
+
+                chatMessages.Add(
+                    new ToolChatMessage(
+                        toolCall.Id,
+                        successResult));
+            }
         }
 
-        if (cleaned.EndsWith("```"))
+        if (!completed)
         {
-            cleaned = cleaned[..^3].Trim();
+            throw new InvalidOperationException(
+                $"Tool execution exceeded the maximum iteration count of {maxIterations}.");
         }
-
-        return cleaned;
     }
 
+    private static string GetOrderStatus(string orderNumber)
+    {
+        return orderNumber switch
+        {
+            "12345" => "Shipped",
+            "78910" => "Processing",
+            _ => "NotFound"
+        };
+    }
 
+    private static readonly ChatTool GetOrderStatusTool =
+    ChatTool.CreateFunctionTool(
+        functionName: "get_order_status",
+        functionDescription:
+            "Gets the current processing, shipping, or delivery status of an order by its order number.",
+        functionParameters: BinaryData.FromString(
+            """
+            {
+              "type": "object",
+              "properties": {
+                "orderNumber": {
+                  "type": "string",
+                  "description": "The order number to query."
+                }
+              },
+              "required": [
+                "orderNumber"
+              ],
+              "additionalProperties": false
+            }
+            """));
 
 }
