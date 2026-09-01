@@ -12,6 +12,9 @@ builder.Services.AddAiServices(builder.Configuration);
 
 using var host = builder.Build();
 
+using var cancellationTokenSource = new CancellationTokenSource();
+var cancellationToken = cancellationTokenSource.Token;
+
 var aiService = host.Services.GetRequiredService<IAiService>();
 
 
@@ -24,8 +27,9 @@ var messagesForToolCall = new List<AiMessage>
     }
 };
 
-await aiService.InspectToolCallAsync(messagesForToolCall);
+var response = await aiService.AskWithToolsAsync(messagesForToolCall, cancellationToken);
 
+Console.WriteLine(response.Text);
 return;
 
 
@@ -33,16 +37,13 @@ return;
 
 var evalRunner = new SupportRequestEvalRunner(aiService);
 
-using var cancellationTokenSource = new CancellationTokenSource();
-var token = cancellationTokenSource.Token;
-
 var passedCount = 0;
 var failedCount = 0;
 var errorCount = 0;
 
 foreach (var evalCase in SupportRequestEvalCases.All)
 {
-    if (token.IsCancellationRequested)
+    if (cancellationToken.IsCancellationRequested)
     {
         Console.WriteLine("Evaluation cancelled.");
         break;
@@ -50,14 +51,14 @@ foreach (var evalCase in SupportRequestEvalCases.All)
 
     try
     {
-        var passed = await evalRunner.RunAsync(evalCase, token);
+        var passed = await evalRunner.RunAsync(evalCase, cancellationToken);
 
         if (passed)
             passedCount++;
         else
             failedCount++;
     }
-    catch (OperationCanceledException) when (token.IsCancellationRequested)
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
         Console.WriteLine();
         Console.WriteLine("Evaluation cancelled.");

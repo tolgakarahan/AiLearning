@@ -244,7 +244,7 @@ public sealed class OpenAiCompatibleAiService : IAiService
         return result;
     }
 
-    public async Task InspectToolCallAsync(IReadOnlyList<AiMessage> messages, CancellationToken cancellationToken = default)
+    public async Task<AiResponse> AskWithToolsAsync(IReadOnlyList<AiMessage> messages, CancellationToken cancellationToken = default)
     {
         var chatMessages = messages
             .Select<AiMessage, ChatMessage>(message =>
@@ -261,7 +261,6 @@ public sealed class OpenAiCompatibleAiService : IAiService
         options.Tools.Add(GetOrderStatusTool);
 
         const int maxIterations = 5;
-        var completed = false;
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
@@ -277,13 +276,15 @@ public sealed class OpenAiCompatibleAiService : IAiService
 
             if (completion.Value.FinishReason == ChatFinishReason.Stop)
             {
-                foreach (var contentPart in completion.Value.Content)
-                {
-                    Console.WriteLine($"Final Response : {contentPart.Text}");
-                }
+                var text = string.Concat(
+                    completion.Value.Content.Select(x => x.Text));
 
-                completed = true;
-                break;
+                return new AiResponse
+                {
+                    Text = text,
+                    Model = _options.Model,
+                    Provider = _options.Provider
+                };
             }
 
             if (completion.Value.FinishReason != ChatFinishReason.ToolCalls)
@@ -376,11 +377,7 @@ public sealed class OpenAiCompatibleAiService : IAiService
             }
         }
 
-        if (!completed)
-        {
-            throw new InvalidOperationException(
-                $"Tool execution exceeded the maximum iteration count of {maxIterations}.");
-        }
+        throw new InvalidOperationException($"Tool execution exceeded the maximum iteration count of {maxIterations}.");
     }
 
     private static string GetOrderStatus(string orderNumber)
