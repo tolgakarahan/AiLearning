@@ -17,6 +17,7 @@ public sealed class OpenAiCompatibleAiService : IAiService
     private readonly ResponsesClient _client;
     private readonly ChatClient _chatClient;
     private readonly AiOptions _options;
+    private readonly IOrderService _orderService;
 
     private static readonly JsonSerializerOptions ToolJsonOptions = new()
     {
@@ -78,11 +79,12 @@ public sealed class OpenAiCompatibleAiService : IAiService
     public OpenAiCompatibleAiService(
         ResponsesClient responsesClient,
         ChatClient chatClient,
-        AiOptions options)
+        AiOptions options, IOrderService orderService)
     {
         _client = responsesClient;
         _chatClient = chatClient;
         _options = options;
+        _orderService = orderService;
     }
 
     public async Task<AiResponse> AskAsync(
@@ -244,7 +246,9 @@ public sealed class OpenAiCompatibleAiService : IAiService
         return result;
     }
 
-    public async Task<AiResponse> AskWithToolsAsync(IReadOnlyList<AiMessage> messages, CancellationToken cancellationToken = default)
+    public async Task<AiResponse> AskWithToolsAsync(
+        IReadOnlyList<AiMessage> messages,
+        CancellationToken cancellationToken = default)
     {
         var chatMessages = messages
             .Select<AiMessage, ChatMessage>(message =>
@@ -259,6 +263,7 @@ public sealed class OpenAiCompatibleAiService : IAiService
         var options = new ChatCompletionOptions();
 
         options.Tools.Add(GetOrderStatusTool);
+        options.Tools.Add(CancelOrderTool);
 
         const int maxIterations = 5;
 
@@ -302,92 +307,120 @@ public sealed class OpenAiCompatibleAiService : IAiService
                 Console.WriteLine($"Tool Name    : {toolCall.FunctionName}");
                 Console.WriteLine($"Arguments    : {toolCall.FunctionArguments}");
 
-                if (toolCall.FunctionName != "get_order_status")
+                var toolResult = toolCall.FunctionName switch
                 {
-                    var errorResult = JsonSerializer.Serialize(new
+                    "get_order_status" => await ExecuteGetOrderStatusAsync(
+                        toolCall.FunctionArguments,
+                        cancellationToken),
+
+                    "cancel_order" => await ExecuteCancelOrderAsync(
+                        toolCall.FunctionArguments,
+                        cancellationToken),
+
+                    _ => JsonSerializer.Serialize(new
                     {
                         success = false,
                         error = $"Unsupported tool: {toolCall.FunctionName}"
-                    });
+                    })
+                };
 
-                    chatMessages.Add(
-                        new ToolChatMessage(
-                            toolCall.Id,
-                            errorResult));
-
-                    continue;
-                }
-
-                GetOrderStatusArguments? arguments;
-
-                try
-                {
-                    arguments =
-                        JsonSerializer.Deserialize<GetOrderStatusArguments>(
-                            toolCall.FunctionArguments);
-                }
-                catch (JsonException exception)
-                {
-                    var errorResult = JsonSerializer.Serialize(new
-                    {
-                        success = false,
-                        error = "Tool arguments contain invalid JSON.",
-                        detail = exception.Message
-                    });
-
-                    chatMessages.Add(
-                        new ToolChatMessage(
-                            toolCall.Id,
-                            errorResult));
-
-                    continue;
-                }
-
-                if (string.IsNullOrWhiteSpace(arguments?.OrderNumber))
-                {
-                    var errorResult = JsonSerializer.Serialize(new
-                    {
-                        success = false,
-                        error = "The order number is required."
-                    });
-
-                    chatMessages.Add(
-                        new ToolChatMessage(
-                            toolCall.Id,
-                            errorResult));
-
-                    continue;
-                }
-
-                var status = GetOrderStatus(arguments.OrderNumber);
-
-                var successResult = JsonSerializer.Serialize(new
-                {
-                    success = true,
-                    orderNumber = arguments.OrderNumber,
-                    status
-                });
-
-                Console.WriteLine($"Tool Result  : {successResult}");
+                Console.WriteLine($"Tool Result  : {toolResult}");
 
                 chatMessages.Add(
                     new ToolChatMessage(
                         toolCall.Id,
-                        successResult));
+                        toolResult));
             }
         }
 
-        throw new InvalidOperationException($"Tool execution exceeded the maximum iteration count of {maxIterations}.");
+        throw new InvalidOperationException(
+            $"Tool execution exceeded the maximum iteration count of {maxIterations}.");
     }
 
-    private static string GetOrderStatus(string orderNumber)
+    private async Task<string> ExecuteGetOrderStatusAsync(
+        BinaryData functionArguments,
+        CancellationToken cancellationToken)
     {
-        return orderNumber switch
+        GetOrderStatusArguments? arguments;
+
+        try
         {
-            "12345" => "Shipped",
-            "78910" => "Processing",
-            _ => "NotFound"
-        };
+            arguments = JsonSerializer.Deserialize<GetOrderStatusArguments>(
+                functionArguments.ToString(),
+                ToolJsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = "Tool arguments contain invalid JSON.",
+                detail = exception.Message
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(arguments?.OrderNumber))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = "The order number is required."
+            });
+        }
+
+        var status = await _orderService.GetStatusAsync(
+            arguments.OrderNumber,
+            cancellationToken);
+
+        return JsonSerializer.Serialize(new
+        {
+            success = true,
+            orderNumber = arguments.OrderNumber,
+            status
+        });
+    }
+
+    private async Task<string> ExecuteCancelOrderAsync(
+        BinaryData functionArguments,
+        CancellationToken cancellationToken)
+    {
+        CancelOrderArguments? arguments;
+
+        try
+        {
+            arguments = JsonSerializer.Deserialize<CancelOrderArguments>(
+                functionArguments.ToString(),
+                ToolJsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = "Tool arguments contain invalid JSON.",
+                detail = exception.Message
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(arguments?.OrderNumber))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = "The order number is required."
+            });
+        }
+
+        var result = await _orderService.CancelAsync(
+            arguments.OrderNumber,
+            cancellationToken);
+
+        return JsonSerializer.Serialize(new
+        {
+            success = result.Status == CancelOrderStatus.Cancelled,
+            orderNumber = arguments.OrderNumber,
+            status = result.Status.ToString()
+        });
     }
 
     private static readonly ChatTool GetOrderStatusTool =
@@ -411,5 +444,28 @@ public sealed class OpenAiCompatibleAiService : IAiService
               "additionalProperties": false
             }
             """));
+
+
+    private static readonly ChatTool CancelOrderTool =
+        ChatTool.CreateFunctionTool(
+            functionName: "cancel_order",
+            functionDescription:
+                "Cancels an order when the user explicitly requests cancellation.",
+            functionParameters: BinaryData.FromString(
+                """
+                {
+                  "type": "object",
+                  "properties": {
+                    "orderNumber": {
+                      "type": "string",
+                      "description": "The order number to cancel."
+                    }
+                  },
+                  "required": [
+                    "orderNumber"
+                  ],
+                  "additionalProperties": false
+                }
+                """));
 
 }

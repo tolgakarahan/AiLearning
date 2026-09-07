@@ -72,6 +72,7 @@ public static class DependencyInjection
 
         services.AddSingleton<IAiService, OpenAiCompatibleAiService>();
         services.AddSingleton<IAiChatSession, AiChatSession>();
+        services.AddSingleton<IOrderService, FakeOrderService>();
 
         return services;
     }

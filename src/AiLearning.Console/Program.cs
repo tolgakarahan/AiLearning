@@ -23,7 +23,7 @@ var messagesForToolCall = new List<AiMessage>
     new()
     {
         Role = "user",
-        Content = "12345 numaralı siparişimin durumu nedir?"
+        Content = "78910 numaralı siparişim gecikti. Böyle devam ederse iptal edeceğim."
     }
 };
 
